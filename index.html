@@ -1,0 +1,320 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sudoku Master</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;padding:20px;background:linear-gradient(135deg,#111827,#312e81);color:#f8fafc;font-family:Arial,sans-serif;display:flex;justify-content:center}
+.app{width:100%;max-width:460px;text-align:center}
+h1{margin:12px 0 6px;font-size:2rem}
+p{color:#cbd5e1}
+.panel{background:#1e293b;padding:16px;border-radius:18px;box-shadow:0 15px 40px #0005}
+.toolbar,.stats,.tools{display:grid;gap:8px;margin-bottom:12px}
+.toolbar{grid-template-columns:1fr 1fr}
+.stats{grid-template-columns:repeat(3,1fr)}
+.tools{grid-template-columns:repeat(3,1fr);margin-top:12px}
+.stat{background:#0f172a;padding:10px 2px;border-radius:9px}
+.stat small{display:block;color:#94a3b8;margin-bottom:5px}
+select,button{font:inherit;border:0;border-radius:8px;cursor:pointer}
+select{padding:10px;background:#334155;color:white;width:100%}
+button:focus-visible,select:focus-visible{outline:3px solid #facc15;outline-offset:2px}
+.btn{padding:10px 6px;background:#818cf8;color:#111827;font-weight:bold}
+.secondary{background:#334155;color:white}
+.status{min-height:38px;color:#c7d2fe;padding:8px 0;font-size:.9rem}
+.board{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:1px;background:#64748b;border:2px solid #a5b4fc}
+.cell{border-radius:0;background:#f8fafc;color:#4f46e5;aspect-ratio:1;min-width:0;padding:0;font-size:clamp(15px,4.5vw,23px);font-weight:600}
+.cell.given{color:#172033;background:#e2e8f0;font-weight:800}
+.cell.related{background:#dbeafe}
+.cell.selected{background:#a5b4fc!important;box-shadow:inset 0 0 0 2px #4f46e5}
+.cell.same{background:#c4b5fd}
+.cell.conflict{background:#fecaca;color:#b91c1c}
+.cell:nth-child(3n){border-right:2px solid #475569}
+.cell:nth-child(9n){border-right:0}
+.cell:nth-child(n+19):nth-child(-n+27),.cell:nth-child(n+46):nth-child(-n+54){border-bottom:2px solid #475569}
+.numbers{display:grid;grid-template-columns:repeat(9,1fr);gap:5px;margin-top:14px}
+.number{padding:11px 0;background:#334155;color:white;font-weight:bold}
+.number:disabled{opacity:.35}
+.note{font-size:9px;line-height:1.3;display:grid;grid-template-columns:repeat(3,1fr)}
+.tools button{font-size:.8rem}
+.tools .active{background:#6366f1}
+#message{font-size:.85rem;min-height:20px}
+@media(max-width:350px){.panel{padding:9px}.numbers{gap:3px}.number{padding:9px 0}.tools{gap:4px}}
+</style>
+</head>
+<body>
+<main class="app">
+<h1>🧩 Sudoku Master</h1>
+<p>Solve the puzzle. Challenge your mind!</p>
+<section class="panel">
+<div class="toolbar">
+<select id="difficulty" aria-label="Difficulty">
+<option value="easy">Easy</option>
+<option value="medium" selected>Medium</option>
+<option value="hard">Hard</option>
+</select>
+<button class="btn" id="newGame">New Game</button>
+</div>
+<div class="stats">
+<div class="stat"><small>TIME</small><strong id="timer">00:00</strong></div>
+<div class="stat"><small>MISTAKES</small><strong id="mistakes">0 / 3</strong></div>
+<div class="stat"><small>FILLED</small><strong id="filled">0 / 81</strong></div>
+</div>
+<div id="status" class="status" role="status" aria-live="polite">Select a cell to begin.</div>
+<div class="board" id="board" aria-label="Sudoku board"></div>
+<div class="numbers" id="numbers">
+</div>
+<div class="tools">
+<button class="btn secondary" id="erase">⌫ Erase</button>
+<button class="btn secondary" id="notes">✎ Notes: Off</button>
+<button class="btn secondary" id="hint">💡 Hint (3)</button>
+</div>
+<p id="message" aria-live="polite">Fill every cell to win!</p>
+<button class="btn secondary" id="restart" style="width:100%">↻ Restart Puzzle</button>
+</section>
+<p>Sudoku Master · Play and learn</p>
+</main>
+<script>
+(() => {
+const $=id=>document.getElementById(id);
+const boardEl=$("board");
+let solution=[], puzzle=[], values=[], notes=[];
+let selected=-1, mistakes=0, hints=3, noteMode=false;
+let seconds=0, timerId=null, gameOver=false;
+
+function shuffle(a){
+ a=[...a];
+ for(let i=a.length-1;i>0;i--){
+  let j=Math.floor(Math.random()*(i+1));
+  [a[i],a[j]]=[a[j],a[i]];
+ }
+ return a;
+}
+
+function makeSolution(){
+ const bands=shuffle([0,1,2]), stacks=shuffle([0,1,2]);
+ const rows=[],cols=[];
+ bands.forEach(b=>shuffle([0,1,2]).forEach(r=>rows.push(b*3+r)));
+ stacks.forEach(b=>shuffle([0,1,2]).forEach(c=>cols.push(b*3+c)));
+ const nums=shuffle([1,2,3,4,5,6,7,8,9]);
+ const pattern=r=>Math.floor(r/3)*3+r%3;
+ return rows.map(r=>cols.map(c=>nums[(pattern(r)*3+Math.floor(pattern(r)/3)+c)%9]));
+}
+
+function countSolutions(grid,limit=2){
+ let best=-1,opts=null;
+ for(let i=0;i<81;i++){
+  const r=Math.floor(i/9),c=i%9;
+  if(grid[r][c])continue;
+  const used=new Set();
+  for(let k=0;k<9;k++){used.add(grid[r][k]);used.add(grid[k][c]);}
+  for(let y=Math.floor(r/3)*3;y<Math.floor(r/3)*3+3;y++)
+   for(let x=Math.floor(c/3)*3;x<Math.floor(c/3)*3+3;x++)used.add(grid[y][x]);
+  const possible=[];
+  for(let n=1;n<=9;n++)if(!used.has(n))possible.push(n);
+  if(!possible.length)return 0;
+  if(opts===null||possible.length<opts.length){best=i;opts=possible;if(opts.length===1)break;}
+ }
+ if(best===-1)return 1;
+ const r=Math.floor(best/9),c=best%9;
+ let count=0;
+ for(const n of opts){
+  grid[r][c]=n;
+  count+=countSolutions(grid,limit-count);
+  grid[r][c]=0;
+  if(count>=limit)return count;
+ }
+ return count;
+}
+
+function generatePuzzle(){
+ solution=makeSolution();
+ puzzle=solution.map(r=>[...r]);
+ const clues={easy:40,medium:34,hard:30}[$("difficulty").value];
+ let removed=0;
+ for(const pos of shuffle(Array.from({length:81},(_,i)=>i))){
+  if(removed>=81-clues)break;
+  const r=Math.floor(pos/9),c=pos%9,v=puzzle[r][c];
+  puzzle[r][c]=0;
+  if(countSolutions(puzzle.map(row=>[...row]),2)===1)removed++;
+  else puzzle[r][c]=v;
+ }
+ values=puzzle.flat();
+ notes=Array.from({length:81},()=>new Set());
+}
+
+function createBoard(){
+ boardEl.innerHTML="";
+ for(let i=0;i<81;i++){
+  const b=document.createElement("button");
+  b.className="cell";b.type="button";b.dataset.i=i;
+  b.setAttribute("aria-label",`Cell ${i+1}`);
+  b.addEventListener("click",()=>selectCell(i));
+  boardEl.appendChild(b);
+ }
+}
+
+function conflicts(i,n){
+ if(!n)return false;
+ const r=Math.floor(i/9),c=i%9;
+ for(let k=0;k<9;k++){
+  if(r*9+k!==i&&values[r*9+k]===n)return true;
+  if(k*9+c!==i&&values[k*9+c]===n)return true;
+ }
+ const br=Math.floor(r/3)*3,bc=Math.floor(c/3)*3;
+ for(let y=br;y<br+3;y++)for(let x=bc;x<bc+3;x++)
+  if(y*9+x!==i&&values[y*9+x]===n)return true;
+ return false;
+}
+
+function render(){
+ let filled=values.filter(Boolean).length;
+ $("filled").textContent=`${filled} / 81`;
+ $("mistakes").textContent=`${mistakes} / 3`;
+ [...boardEl.children].forEach((b,i)=>{
+  const r=Math.floor(i/9),c=i%9,v=values[i];
+  b.className="cell";b.replaceChildren();b.disabled=gameOver;
+  if(puzzle[i])b.classList.add("given");
+  if(selected>=0){
+   const sr=Math.floor(selected/9),sc=selected%9;
+   if(r===sr||c===sc||(Math.floor(r/3)===Math.floor(sr/3)&&Math.floor(c/3)===Math.floor(sc/3)))b.classList.add("related");
+   if(i===selected)b.classList.add("selected");
+   if(v&&v===values[selected])b.classList.add("same");
+  }
+  if(v){
+   b.textContent=v;
+   if(conflicts(i,v))b.classList.add("conflict");
+  }else if(notes[i].size){
+   const mini=document.createElement("span");mini.className="note";
+   for(let n=1;n<=9;n++){
+    const s=document.createElement("span");s.textContent=notes[i].has(n)?n:"";mini.appendChild(s);
+   }
+   b.appendChild(mini);
+  }
+  b.setAttribute("aria-label",`Row ${r+1}, column ${c+1}, ${v||"empty"}`);
+ });
+ [...$("numbers").children].forEach(b=>{
+  b.disabled=gameOver;
+  b.classList.toggle("active",selected>=0&&values[selected]===Number(b.dataset.n));
+ });
+}
+
+function selectCell(i){
+ selected=i;
+ $("status").textContent=puzzle[i]?"This is a fixed number.":`Row ${Math.floor(i/9)+1}, Column ${i%9+1}`;
+ render();
+}
+
+function finishCheck(){
+ if(values.every((v,i)=>v===solution[Math.floor(i/9)][i%9])){
+  gameOver=true;
+  clearInterval(timerId);
+  $("status").textContent="🎉 Congratulations! Puzzle solved!";
+  $("message").textContent=`Solved in ${$("timer").textContent}!`;
+  render();return true;
+ }
+ return false;
+}
+
+function enter(n){
+ if(gameOver)return;
+ if(selected<0){$("message").textContent="Select a cell first.";return;}
+ if(puzzle[selected]){$("message").textContent="Fixed numbers cannot be changed.";return;}
+ if(noteMode){
+  if(values[selected]){$("message").textContent="Erase the cell before adding notes.";return;}
+  if(notes[selected].has(n))notes[selected].delete(n);else notes[selected].add(n);
+  render();return;
+ }
+ const answer=solution[Math.floor(selected/9)][selected%9];
+ if(n!==answer){
+  mistakes++;
+  $("message").textContent=`Incorrect number. Mistakes: ${mistakes}/3`;
+  if(mistakes>=3){
+   gameOver=true;clearInterval(timerId);
+   $("status").textContent="Game over! Start a new game.";
+  }
+  render();return;
+ }
+ values[selected]=n;notes[selected].clear();
+ $("message").textContent="Correct! Keep going.";
+ if(!finishCheck()){
+  render();
+  const next=values.findIndex((v,i)=>!v&&!puzzle[i]);
+  if(next>=0)selectCell(next);
+ }
+}
+
+function erase(){
+ if(gameOver||selected<0)return;
+ if(puzzle[selected]){$("message").textContent="Cannot erase a fixed number.";return;}
+ values[selected]=0;notes[selected].clear();render();
+ $("message").textContent="Cell erased.";
+}
+
+function hint(){
+ if(gameOver||hints<=0)return;
+ let i=selected;
+ if(i<0||puzzle[i]||values[i])i=values.findIndex((v,j)=>!v&&!puzzle[j]);
+ if(i<0)return;
+ selected=i;
+ values[i]=solution[Math.floor(i/9)][i%9];
+ notes[i].clear();hints--;
+ $("hint").textContent=`💡 Hint (${hints})`;
+ $("message").textContent="Hint added!";
+ if(!finishCheck()){render();selectCell(i);}
+}
+
+function newGame(){
+ clearInterval(timerId);
+ mistakes=0;hints=3;seconds=0;selected=-1;
+ noteMode=false;gameOver=false;
+ $("notes").textContent="✎ Notes: Off";
+ $("notes").classList.remove("active");
+ $("hint").textContent="💡 Hint (3)";
+ $("timer").textContent="00:00";
+ $("message").textContent="Fill every cell to win!";
+ $("status").textContent="Select a cell to begin.";
+ generatePuzzle();createBoard();render();
+ timerId=setInterval(()=>{
+  if(!gameOver){
+   seconds++;
+   $("timer").textContent=`${String(Math.floor(seconds/60)).padStart(2,"0")}:${String(seconds%60).padStart(2,"0")}`;
+  }
+ },1000);
+}
+
+for(let n=1;n<=9;n++){
+ const b=document.createElement("button");
+ b.className="number";b.textContent=n;b.dataset.n=n;
+ b.addEventListener("click",()=>enter(n));
+ $("numbers").appendChild(b);
+}
+$("newGame").addEventListener("click",newGame);
+$("restart").addEventListener("click",newGame);
+$("erase").addEventListener("click",erase);
+$("hint").addEventListener("click",hint);
+$("notes").addEventListener("click",()=>{
+ noteMode=!noteMode;
+ $("notes").textContent=noteMode?"✎ Notes: On":"✎ Notes: Off";
+ $("notes").classList.toggle("active",noteMode);
+});
+document.addEventListener("keydown",e=>{
+ if(e.key>="1"&&e.key<="9")enter(Number(e.key));
+ if(e.key==="Backspace"||e.key==="Delete")erase();
+ if(selected>=0&&["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)){
+  e.preventDefault();
+  let r=Math.floor(selected/9),c=selected%9;
+  if(e.key==="ArrowUp")r=(r+8)%9;
+  if(e.key==="ArrowDown")r=(r+1)%9;
+  if(e.key==="ArrowLeft")c=(c+8)%9;
+  if(e.key==="ArrowRight")c=(c+1)%9;
+  selectCell(r*9+c);boardEl.children[selected].focus();
+ }
+});
+newGame();
+})();
+</script>
+</body>
+</html>
